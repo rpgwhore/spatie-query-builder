@@ -43,20 +43,16 @@ trait AddsFieldsToQuery
         return $this;
     }
 
-    /**
-     * @param array<string, array<string>|Collection<int, string>> $exceptedFields
-     */
-    public function exceptFields(array $exceptedFields): static
+    public function exceptFields(string ...$fields): static
     {
-        $this->exceptedFieldsWildcard = collect($exceptedFields['*'] ?? [])
-            ->map(fn (string $field) => (string) $field)
-            ->values();
+        $this->exceptedFieldsWildcard = collect();
+        $this->exceptedFieldsPerModel = collect();
 
-        $this->exceptedFieldsPerModel = collect($exceptedFields)
-            ->reject(fn ($value, string $key) => $key === '*')
-            ->mapWithKeys(function ($fields, string $modelClass): array {
-                return [$modelClass => collect($fields)->map(fn (string $field) => (string) $field)->values()];
-            });
+        collect($fields)->each(fn (string $field) => $this->registerExcludedFieldSpecifier($field));
+
+        $this->exceptedFieldsWildcard = $this->exceptedFieldsWildcard->unique()->values();
+        $this->exceptedFieldsPerModel = $this->exceptedFieldsPerModel
+            ->map(fn (Collection $fields) => $fields->unique()->values());
 
         $this->hasExceptedFields = $this->exceptedFieldsWildcard->isNotEmpty() || $this->exceptedFieldsPerModel->isNotEmpty();
 
@@ -74,6 +70,58 @@ trait AddsFieldsToQuery
         }
 
         return $this;
+    }
+
+    protected function registerExcludedFieldSpecifier(string $specifier): void
+    {
+        $specifier = trim($specifier);
+
+        if ($specifier === '') {
+            return;
+        }
+
+        if (! Str::contains($specifier, '.')) {
+            $this->addModelExclusion($this->getModel()::class, $specifier);
+
+            return;
+        }
+
+        $path = Str::beforeLast($specifier, '.');
+        $column = Str::afterLast($specifier, '.');
+
+        if ($path === '*') {
+            $this->exceptedFieldsWildcard->push($column);
+
+            return;
+        }
+
+        $modelClass = is_subclass_of($path, Model::class)
+            ? $path
+            : $this->resolveModelClassFromPath($path);
+
+        if (! $modelClass) {
+            return;
+        }
+
+        $this->addModelExclusion($modelClass, $column);
+    }
+
+    protected function addModelExclusion(string $modelClass, string $column): void
+    {
+        if (! is_subclass_of($modelClass, Model::class)) {
+            return;
+        }
+
+        $column = trim($column);
+
+        if ($column === '') {
+            return;
+        }
+
+        /** @var Collection<int, string> $existing */
+        $existing = $this->exceptedFieldsPerModel->get($modelClass, collect());
+
+        $this->exceptedFieldsPerModel->put($modelClass, $existing->push(Str::afterLast($column, '.')));
     }
 
     protected function addRequestedModelFieldsToQuery(): void

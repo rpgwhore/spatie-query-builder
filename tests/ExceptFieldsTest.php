@@ -5,7 +5,6 @@ use Illuminate\Support\Facades\DB;
 use Spatie\QueryBuilder\Exceptions\InvalidFieldQuery;
 use Spatie\QueryBuilder\QueryBuilder;
 use Spatie\QueryBuilder\Tests\TestClasses\Models\MorphModel;
-use Spatie\QueryBuilder\Tests\TestClasses\Models\NestedRelatedModel;
 use Spatie\QueryBuilder\Tests\TestClasses\Models\RelatedModel;
 use Spatie\QueryBuilder\Tests\TestClasses\Models\TestModel;
 
@@ -55,12 +54,10 @@ it('treats wildcard excluded root fields as invalid requested fields', function 
 
     QueryBuilder::for(TestModel::class, $request)
         ->allowedFields('id', 'name', 'created_at')
-        ->exceptFields([
-            '*' => ['created_at'],
-        ]);
+        ->exceptFields('*.created_at');
 });
 
-it('merges wildcard and model specific exclusions for validation', function () {
+it('merges wildcard and relation-path exclusions for validation', function () {
     $this->expectException(InvalidFieldQuery::class);
 
     $request = new Request([
@@ -69,10 +66,7 @@ it('merges wildcard and model specific exclusions for validation', function () {
 
     QueryBuilder::for(TestModel::class, $request)
         ->allowedFields('id', 'name', 'password', 'created_at')
-        ->exceptFields([
-            '*' => ['created_at'],
-            TestModel::class => ['password'],
-        ]);
+        ->exceptFields('*.created_at', 'password');
 });
 
 it('treats excluded included relationship fields as invalid', function () {
@@ -89,9 +83,7 @@ it('treats excluded included relationship fields as invalid', function () {
     QueryBuilder::for(TestModel::class, $request)
         ->allowedFields('id', 'related_models.name', 'related_models.guard_name')
         ->allowedIncludes('relatedModels')
-        ->exceptFields([
-            RelatedModel::class => ['guard_name'],
-        ]);
+        ->exceptFields('relatedModels.guard_name');
 });
 
 it('treats excluded nested relationship fields as invalid', function () {
@@ -108,9 +100,7 @@ it('treats excluded nested relationship fields as invalid', function () {
     QueryBuilder::for(TestModel::class, $request)
         ->allowedFields('name', 'nested_related_models.id', 'nested_related_models.name')
         ->allowedIncludes('relatedModels.nestedRelatedModels')
-        ->exceptFields([
-            '*' => ['id'],
-        ]);
+        ->exceptFields('*.id');
 });
 
 it('excludes server-side fields from generated relationship select statements', function () {
@@ -127,9 +117,7 @@ it('excludes server-side fields from generated relationship select statements', 
     QueryBuilder::for(TestModel::class, $request)
         ->allowedFields('id', 'name', 'related_models.name', 'related_models.guard_name')
         ->allowedIncludes('relatedModels')
-        ->exceptFields([
-            RelatedModel::class => ['guard_name'],
-        ])
+        ->exceptFields('relatedModels.guard_name')
         ->first()
         ?->relatedModels;
 
@@ -152,10 +140,7 @@ it('preserves required hasMany keys even when excluded', function () {
     $result = QueryBuilder::for(TestModel::class, $request)
         ->allowedFields('name', 'related_models.name')
         ->allowedIncludes('relatedModels')
-        ->exceptFields([
-            '*' => ['id'],
-            RelatedModel::class => ['test_model_id'],
-        ])
+        ->exceptFields('*.id', 'relatedModels.test_model_id')
         ->findOrFail($this->root->id);
 
     expect($result->relatedModels)->toHaveCount(1);
@@ -177,10 +162,7 @@ it('preserves required belongsTo keys even when excluded', function () {
     $result = QueryBuilder::for(TestModel::class, $request)
         ->allowedFields('name', 'related_models.name')
         ->allowedIncludes('relatedModel')
-        ->exceptFields([
-            '*' => ['id'],
-            TestModel::class => ['related_model_id'],
-        ])
+        ->exceptFields('*.id', 'related_model_id')
         ->findOrFail($this->root->id);
 
     expect($result->relatedModel)->not()->toBeNull();
@@ -203,9 +185,7 @@ it('preserves required belongsToMany keys even when excluded', function () {
     $result = QueryBuilder::for(TestModel::class, $request)
         ->allowedFields('name', 'related_through_pivot_models.name')
         ->allowedIncludes('relatedThroughPivotModels')
-        ->exceptFields([
-            '*' => ['id'],
-        ])
+        ->exceptFields('*.id')
         ->findOrFail($this->root->id);
 
     expect($result->relatedThroughPivotModels)->toHaveCount(1);
@@ -227,10 +207,7 @@ it('preserves required morph keys even when excluded', function () {
     $result = QueryBuilder::for(TestModel::class, $request)
         ->allowedFields('name', 'morph_models.name')
         ->allowedIncludes('morphModels')
-        ->exceptFields([
-            '*' => ['id'],
-            MorphModel::class => ['parent_id', 'parent_type'],
-        ])
+        ->exceptFields('*.id', 'morphModels.parent_id', 'morphModels.parent_type')
         ->findOrFail($this->root->id);
 
     expect($result->morphModels)->toHaveCount(1);
@@ -252,11 +229,7 @@ it('preserves keys for nested includes when exclusions are active', function () 
     $result = QueryBuilder::for(TestModel::class, $request)
         ->allowedFields('name', 'related_models.name', 'nested_related_models.name')
         ->allowedIncludes('relatedModels.nestedRelatedModels')
-        ->exceptFields([
-            '*' => ['id'],
-            RelatedModel::class => ['test_model_id'],
-            NestedRelatedModel::class => ['related_model_id'],
-        ])
+        ->exceptFields('*.id', 'relatedModels.test_model_id', 'relatedModels.nestedRelatedModels.related_model_id')
         ->findOrFail($this->root->id);
 
     expect($result->relatedModels)->toHaveCount(1);
@@ -277,4 +250,33 @@ it('remains fully backwards compatible when exceptFields is not used', function 
         ->toSql();
 
     expect($query)->toEqual($expected);
+});
+
+it('supports wildcard-prefixed field syntax', function () {
+    $this->expectException(InvalidFieldQuery::class);
+
+    $request = new Request([
+        'fields' => ['test_models' => 'id,name,created_at'],
+    ]);
+
+    QueryBuilder::for(TestModel::class, $request)
+        ->allowedFields('id', 'name', 'created_at')
+        ->exceptFields('*.created_at');
+});
+
+it('supports relation-path field syntax', function () {
+    $this->expectException(InvalidFieldQuery::class);
+
+    $request = new Request([
+        'fields' => [
+            'test_models' => 'id',
+            'related_models' => 'name,guard_name',
+        ],
+        'include' => ['relatedModels'],
+    ]);
+
+    QueryBuilder::for(TestModel::class, $request)
+        ->allowedFields('id', 'related_models.name', 'related_models.guard_name')
+        ->allowedIncludes('relatedModels')
+        ->exceptFields('relatedModels.guard_name');
 });
