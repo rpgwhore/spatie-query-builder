@@ -35,6 +35,9 @@ class TestCase extends Orchestra
             $table->timestamps();
             $table->string('name')->nullable();
             $table->string('full_name')->nullable();
+            $table->integer('related_model_id')->nullable();
+            $table->string('password')->nullable();
+            $table->string('remember_token')->nullable();
             $table->double('salary')->nullable();
             $table->boolean('is_visible')->default(true);
         });
@@ -61,6 +64,7 @@ class TestCase extends Orchestra
             $table->integer('test_model_id');
             $table->string('name');
             $table->string('full_name')->nullable();
+            $table->string('guard_name')->nullable();
         });
 
         $app['db']->connection()->getSchemaBuilder()->create('nested_related_models', function (Blueprint $table) {

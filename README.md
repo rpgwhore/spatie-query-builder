@@ -106,6 +106,45 @@ $users = QueryBuilder::for(User::class)
 
 [Read more about selecting fields.](https://spatie.be/docs/laravel-query-builder/v7/features/selecting-fields/)
 
+### Excluding fields server-side
+
+Use `exceptFields()` to deny fields from selection at the server level, even when they are otherwise present in `allowedFields()`.
+
+```php
+use App\Models\Role;
+use App\Models\User;
+use Spatie\QueryBuilder\QueryBuilder;
+
+$users = QueryBuilder::for(User::class)
+    ->allowedIncludes('roles', 'roles.permissions')
+    ->allowedFields(
+        'id',
+        'name',
+        'email',
+        'created_at',
+        'updated_at',
+        'password',
+        'remember_token',
+        'roles.guard_name',
+    )
+    ->exceptFields([
+        '*' => ['created_at', 'updated_at', 'deleted_at'],
+
+        User::class => ['password', 'remember_token'],
+
+        Role::class => ['guard_name'],
+    ])
+    ->get();
+```
+
+Behavior notes:
+
+- Wildcard exclusions (`*`) apply to every model in the query, including included and nested relationships.
+- Model-specific exclusions are merged with wildcard exclusions.
+- Excluded requested fields are treated as invalid fields and trigger the same validation behavior as any non-allowed field.
+- Required relationship keys are preserved automatically for relation hydration.
+- If `exceptFields()` is not used, behavior is unchanged.
+
 ## Support us
 
 [<img src="https://github-ads.s3.eu-central-1.amazonaws.com/laravel-query-builder.jpg?t=1" width="419px" />](https://spatie.be/github-ad-click/laravel-query-builder)

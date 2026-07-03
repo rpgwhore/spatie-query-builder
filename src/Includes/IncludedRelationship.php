@@ -5,6 +5,7 @@ namespace Spatie\QueryBuilder\Includes;
 use Closure;
 use Exception;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Collection;
 
 class IncludedRelationship implements IncludeInterface
@@ -27,18 +28,21 @@ class IncludedRelationship implements IncludeInterface
 
                 if ($this->fieldsCallback) {
                     $tableName = null;
-                    $strategy = config('query-builder.convert_relation_table_name_strategy');
-
-                    if ($strategy !== null) {
-                        try {
-                            $relatedModel = $query->getModel()->{$fullRelationName}()->getRelated();
-                            $tableName = $relatedModel->getTable();
-                        } catch (Exception) {
-                            $tableName = null;
+                    $relationInstance = null;
+                    try {
+                        $relationInstance = $query->getModel()->{$fullRelationName}();
+                        if (! $relationInstance instanceof Relation) {
+                            $relationInstance = null;
                         }
+
+                        $relatedModel = $query->getModel()->{$fullRelationName}()->getRelated();
+                        $tableName = $relatedModel->getTable();
+                    } catch (Exception) {
+                        $tableName = null;
+                        $relationInstance = null;
                     }
 
-                    $fields = ($this->fieldsCallback)($fullRelationName, $tableName);
+                    $fields = ($this->fieldsCallback)($fullRelationName, $tableName, $relationInstance);
                 }
 
                 if (empty($fields)) {

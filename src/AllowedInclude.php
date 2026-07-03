@@ -3,6 +3,7 @@
 namespace Spatie\QueryBuilder;
 
 use Closure;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Spatie\QueryBuilder\Includes\IncludedAvg;
 use Spatie\QueryBuilder\Includes\IncludedCallback;
 use Spatie\QueryBuilder\Includes\IncludedCount;
@@ -74,7 +75,7 @@ class AllowedInclude
     {
         if ($this->includeClass instanceof IncludedRelationship) {
             $this->includeClass->setFieldsCallback(
-                fn (string $relation, ?string $tableName = null) => $query->getRequestedFieldsForRelatedTable($relation, $tableName)
+                fn (string $relation, ?string $tableName = null, ?Relation $relationInstance = null) => $query->getRequestedFieldsForRelatedTable($relation, $tableName, $relationInstance)
             );
         }
 
