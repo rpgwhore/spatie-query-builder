@@ -25,6 +25,20 @@ SELECT "id", "name" FROM "users"
 
 When not allowing any fields explicitly, Eloquent's default behaviour of selecting all fields will be used. 
 
+## Hiding fields from serialized output
+
+If you want to hide attributes from the API response payload without defining an explicit `allowedFields` contract, you can use `hideFields`.
+
+```php
+QueryBuilder::for(User::class)
+    ->hideFields('password', '*.created_at')
+    ->get();
+```
+
+`hideFields` applies to serialized model output (`toArray()` / JSON), including already loaded relationships. It does not modify SQL column selection and does not validate client-requested `fields[...]` values.
+
+For request-level field contracts and validation, keep using `allowedFields` (optionally with `exceptFields`).
+
 ## Disallowed fields/selects
 
 When trying to select a column that's not specified in `allowedFields()` an `InvalidFieldQuery` exception will be thrown:

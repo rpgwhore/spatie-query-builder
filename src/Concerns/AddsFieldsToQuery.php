@@ -3,6 +3,7 @@
 namespace Spatie\QueryBuilder\Concerns;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Pagination\AbstractPaginator;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -10,7 +11,6 @@ use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\Relations\MorphOne;
-use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -19,13 +19,24 @@ use Spatie\QueryBuilder\Exceptions\UnknownIncludedFieldsQuery;
 
 trait AddsFieldsToQuery
 {
+    /** @var Collection<int, string>|null */
     protected ?Collection $allowedFields = null;
 
+    /** @var Collection<int, string> */
     protected Collection $exceptedFieldsWildcard;
 
+    /** @var Collection<class-string<Model>, Collection<int, string>> */
     protected Collection $exceptedFieldsPerModel;
 
     protected bool $hasExceptedFields = false;
+
+    /** @var Collection<int, string> */
+    protected Collection $hiddenFieldsWildcard;
+
+    /** @var Collection<class-string<Model>, Collection<int, string>> */
+    protected Collection $hiddenFieldsPerModel;
+
+    protected bool $hasHiddenFields = false;
 
     public function allowedFields(string ...$fields): static
     {
@@ -64,12 +75,156 @@ trait AddsFieldsToQuery
             $this->ensureAllFieldsExist();
             $this->addRequestedModelFieldsToQuery();
 
-            if (property_exists($this, 'allowedIncludes') && $this->allowedIncludes instanceof Collection) {
+            if ($this->allowedIncludes instanceof Collection) {
                 $this->addIncludesToQuery($this->filterNonExistingIncludes($this->request->includes()));
             }
         }
 
         return $this;
+    }
+
+    public function hideFields(string ...$fields): static
+    {
+        $this->hiddenFieldsWildcard = collect();
+        $this->hiddenFieldsPerModel = collect();
+
+        collect($fields)->each(fn (string $field) => $this->registerHiddenFieldSpecifier($field));
+
+        $this->hiddenFieldsWildcard = $this->hiddenFieldsWildcard->unique()->values();
+        $this->hiddenFieldsPerModel = $this->hiddenFieldsPerModel
+            ->map(fn (Collection $modelFields) => $modelFields->unique()->values());
+
+        $this->hasHiddenFields = $this->hiddenFieldsWildcard->isNotEmpty() || $this->hiddenFieldsPerModel->isNotEmpty();
+
+        return $this;
+    }
+
+    public function applyHiddenFieldsToResult(mixed $result): mixed
+    {
+        if (! $this->hasHiddenFields) {
+            return $result;
+        }
+
+        if ($result instanceof Model) {
+            $this->applyHiddenFieldsToModel($result);
+
+            return $result;
+        }
+
+        if ($result instanceof AbstractPaginator) {
+            $this->applyHiddenFieldsToResult($result->getCollection());
+
+            return $result;
+        }
+
+        if ($result instanceof Collection) {
+            $result->each(function (mixed $item): void {
+                if ($item instanceof Model) {
+                    $this->applyHiddenFieldsToModel($item);
+                }
+            });
+
+            return $result;
+        }
+
+        return $result;
+    }
+
+    protected function registerHiddenFieldSpecifier(string $specifier): void
+    {
+        $specifier = trim($specifier);
+
+        if ($specifier === '') {
+            return;
+        }
+
+        if (! Str::contains($specifier, '.')) {
+            $this->addModelHiddenField($this->getModel()::class, $specifier);
+
+            return;
+        }
+
+        $path = Str::beforeLast($specifier, '.');
+        $column = Str::afterLast($specifier, '.');
+
+        if ($path === '*') {
+            $this->hiddenFieldsWildcard->push($column);
+
+            return;
+        }
+
+        $modelClass = is_subclass_of($path, Model::class)
+            ? $path
+            : $this->resolveModelClassFromPath($path);
+
+        if (! $modelClass) {
+            return;
+        }
+
+        $this->addModelHiddenField($modelClass, $column);
+    }
+
+    protected function addModelHiddenField(string $modelClass, string $column): void
+    {
+        if (! is_subclass_of($modelClass, Model::class)) {
+            return;
+        }
+
+        $column = trim($column);
+
+        if ($column === '') {
+            return;
+        }
+
+        /** @var Collection<int, string> $existing */
+        $existing = $this->hiddenFieldsPerModel->get($modelClass, collect());
+
+        $this->hiddenFieldsPerModel->put($modelClass, $existing->push(Str::afterLast($column, '.')));
+    }
+
+    protected function applyHiddenFieldsToModel(Model $model): void
+    {
+        $columns = $this->hiddenColumnsForModel($model::class);
+
+        if ($columns !== []) {
+            $model->makeHidden($columns);
+        }
+
+        foreach ($model->getRelations() as $related) {
+            if ($related instanceof Model) {
+                $this->applyHiddenFieldsToModel($related);
+
+                continue;
+            }
+
+            if ($related instanceof Collection) {
+                $related->each(function (mixed $relatedItem): void {
+                    if ($relatedItem instanceof Model) {
+                        $this->applyHiddenFieldsToModel($relatedItem);
+                    }
+                });
+            }
+        }
+    }
+
+    /**
+     * @param class-string<Model> $modelClass
+     * @return array<int, string>
+     */
+    protected function hiddenColumnsForModel(string $modelClass): array
+    {
+        /** @var array<int, string> $wildcardColumns */
+        $wildcardColumns = $this->hiddenFieldsWildcard->all();
+
+        /** @var array<int, string> $modelColumns */
+        $modelColumns = $this->hiddenFieldsPerModel->get($modelClass, collect())->all();
+
+        return collect($wildcardColumns)
+            ->merge($modelColumns)
+            ->filter(fn (mixed $column): bool => is_string($column) && $column !== '')
+            ->unique()
+            ->values()
+            ->all();
     }
 
     protected function registerExcludedFieldSpecifier(string $specifier): void
@@ -160,6 +315,10 @@ trait AddsFieldsToQuery
         $this->select($prependedFields->all());
     }
 
+    /**
+     * @param Relation<Model, Model, mixed>|null $relationInstance
+     * @return array<int, string>
+     */
     public function getRequestedFieldsForRelatedTable(string $relation, ?string $tableName = null, ?Relation $relationInstance = null): array
     {
         $possibleRelatedNames = [
@@ -381,6 +540,7 @@ trait AddsFieldsToQuery
         return null;
     }
 
+    /** @return Collection<int, string> */
     protected function requiredRootFieldsForRequestedIncludes(): Collection
     {
         $requestedIncludes = $this->request->includes();
@@ -410,14 +570,14 @@ trait AddsFieldsToQuery
             ->values();
     }
 
+    /**
+     * @param Relation<Model, Model, mixed> $relation
+     * @return array<int, string>
+     */
     protected function requiredRootFieldsForRelation(Relation $relation): array
     {
         if ($relation instanceof BelongsTo) {
             return [$relation->getForeignKeyName()];
-        }
-
-        if ($relation instanceof MorphTo) {
-            return [$relation->getForeignKeyName(), $relation->getMorphType()];
         }
 
         if ($relation instanceof BelongsToMany) {
@@ -431,6 +591,10 @@ trait AddsFieldsToQuery
         return [$this->getModel()->getKeyName()];
     }
 
+    /**
+     * @param Relation<Model, Model, mixed> $relation
+     * @return Collection<int, string>
+     */
     protected function requiredRelatedFieldsForRelation(Relation $relation): Collection
     {
         $requiredFields = [];
