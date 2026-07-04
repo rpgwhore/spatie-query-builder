@@ -38,6 +38,14 @@ trait AddsFieldsToQuery
 
     protected bool $hasHiddenFields = false;
 
+    /** @var Collection<int, string> */
+    protected Collection $onlyFieldsWildcard;
+
+    /** @var Collection<class-string<Model>, Collection<int, string>> */
+    protected Collection $onlyFieldsPerModel;
+
+    protected bool $hasOnlyFields = false;
+
     public function allowedFields(string ...$fields): static
     {
         $this->allowedFields = collect($fields)
@@ -97,6 +105,53 @@ trait AddsFieldsToQuery
         $this->hasHiddenFields = $this->hiddenFieldsWildcard->isNotEmpty() || $this->hiddenFieldsPerModel->isNotEmpty();
 
         return $this;
+    }
+
+    public function onlyFields(string ...$fields): static
+    {
+        $this->onlyFieldsWildcard = collect();
+        $this->onlyFieldsPerModel = collect();
+
+        collect($fields)->each(fn (string $field) => $this->registerOnlyFieldSpecifier($field));
+
+        $this->onlyFieldsWildcard = $this->onlyFieldsWildcard->unique()->values();
+        $this->onlyFieldsPerModel = $this->onlyFieldsPerModel
+            ->map(fn (Collection $modelFields) => $modelFields->unique()->values());
+
+        $this->hasOnlyFields = $this->onlyFieldsWildcard->isNotEmpty() || $this->onlyFieldsPerModel->isNotEmpty();
+
+        return $this;
+    }
+
+    public function applyOnlyFieldsToResult(mixed $result): mixed
+    {
+        if (! $this->hasOnlyFields) {
+            return $result;
+        }
+
+        if ($result instanceof Model) {
+            $this->applyOnlyFieldsToModel($result);
+
+            return $result;
+        }
+
+        if ($result instanceof AbstractPaginator) {
+            $this->applyOnlyFieldsToResult($result->getCollection());
+
+            return $result;
+        }
+
+        if ($result instanceof Collection) {
+            $result->each(function (mixed $item): void {
+                if ($item instanceof Model) {
+                    $this->applyOnlyFieldsToModel($item);
+                }
+            });
+
+            return $result;
+        }
+
+        return $result;
     }
 
     public function applyHiddenFieldsToResult(mixed $result): mixed
@@ -164,6 +219,40 @@ trait AddsFieldsToQuery
         $this->addModelHiddenField($modelClass, $column);
     }
 
+    protected function registerOnlyFieldSpecifier(string $specifier): void
+    {
+        $specifier = trim($specifier);
+
+        if ($specifier === '') {
+            return;
+        }
+
+        if (! Str::contains($specifier, '.')) {
+            $this->addModelOnlyField($this->getModel()::class, $specifier);
+
+            return;
+        }
+
+        $path = Str::beforeLast($specifier, '.');
+        $column = Str::afterLast($specifier, '.');
+
+        if ($path === '*') {
+            $this->onlyFieldsWildcard->push($column);
+
+            return;
+        }
+
+        $modelClass = is_subclass_of($path, Model::class)
+            ? $path
+            : $this->resolveModelClassFromPath($path);
+
+        if (! $modelClass) {
+            return;
+        }
+
+        $this->addModelOnlyField($modelClass, $column);
+    }
+
     protected function addModelHiddenField(string $modelClass, string $column): void
     {
         if (! is_subclass_of($modelClass, Model::class)) {
@@ -180,6 +269,24 @@ trait AddsFieldsToQuery
         $existing = $this->hiddenFieldsPerModel->get($modelClass, collect());
 
         $this->hiddenFieldsPerModel->put($modelClass, $existing->push(Str::afterLast($column, '.')));
+    }
+
+    protected function addModelOnlyField(string $modelClass, string $column): void
+    {
+        if (! is_subclass_of($modelClass, Model::class)) {
+            return;
+        }
+
+        $column = trim($column);
+
+        if ($column === '') {
+            return;
+        }
+
+        /** @var Collection<int, string> $existing */
+        $existing = $this->onlyFieldsPerModel->get($modelClass, collect());
+
+        $this->onlyFieldsPerModel->put($modelClass, $existing->push(Str::afterLast($column, '.')));
     }
 
     protected function applyHiddenFieldsToModel(Model $model): void
@@ -207,6 +314,39 @@ trait AddsFieldsToQuery
         }
     }
 
+    protected function applyOnlyFieldsToModel(Model $model): void
+    {
+        if ($this->hasOnlyRuleForModel($model::class)) {
+            $visibleColumns = $this->onlyColumnsForModel($model::class);
+            $attributeColumns = array_keys($model->getAttributes());
+
+            $columnsToHide = collect($attributeColumns)
+                ->reject(fn (string $column): bool => in_array($column, $visibleColumns, true))
+                ->values()
+                ->all();
+
+            if ($columnsToHide !== []) {
+                $model->makeHidden($columnsToHide);
+            }
+        }
+
+        foreach ($model->getRelations() as $related) {
+            if ($related instanceof Model) {
+                $this->applyOnlyFieldsToModel($related);
+
+                continue;
+            }
+
+            if ($related instanceof Collection) {
+                $related->each(function (mixed $relatedItem): void {
+                    if ($relatedItem instanceof Model) {
+                        $this->applyOnlyFieldsToModel($relatedItem);
+                    }
+                });
+            }
+        }
+    }
+
     /**
      * @param class-string<Model> $modelClass
      * @return array<int, string>
@@ -218,6 +358,31 @@ trait AddsFieldsToQuery
 
         /** @var array<int, string> $modelColumns */
         $modelColumns = $this->hiddenFieldsPerModel->get($modelClass, collect())->all();
+
+        return collect($wildcardColumns)
+            ->merge($modelColumns)
+            ->filter(fn (mixed $column): bool => is_string($column) && $column !== '')
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    protected function hasOnlyRuleForModel(string $modelClass): bool
+    {
+        return $this->onlyFieldsWildcard->isNotEmpty() || $this->onlyFieldsPerModel->has($modelClass);
+    }
+
+    /**
+     * @param class-string<Model> $modelClass
+     * @return array<int, string>
+     */
+    protected function onlyColumnsForModel(string $modelClass): array
+    {
+        /** @var array<int, string> $wildcardColumns */
+        $wildcardColumns = $this->onlyFieldsWildcard->all();
+
+        /** @var array<int, string> $modelColumns */
+        $modelColumns = $this->onlyFieldsPerModel->get($modelClass, collect())->all();
 
         return collect($wildcardColumns)
             ->merge($modelColumns)

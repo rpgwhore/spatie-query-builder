@@ -39,6 +39,26 @@ QueryBuilder::for(User::class)
 
 For request-level field contracts and validation, keep using `allowedFields` (optionally with `exceptFields`).
 
+## Showing only specific fields in serialized output
+
+If you want to expose only a specific set of fields, use `onlyFields`.
+
+```php
+QueryBuilder::for(User::class)
+    ->onlyFields('id', 'name', 'roles.id', 'roles.name')
+    ->get();
+```
+
+`onlyFields` applies to serialized model output (`toArray()` / JSON), including loaded relationships. It does not modify SQL column selection and does not validate client-requested `fields[...]` values.
+
+When both `allowedFields` and `onlyFields` are used:
+
+- `allowedFields` controls what the client may request.
+- `onlyFields` caps what can be serialized.
+- If a requested field is not part of `onlyFields`, it will still be omitted from output.
+
+When both `onlyFields` and `hideFields` are used, `hideFields` always wins.
+
 ## Disallowed fields/selects
 
 When trying to select a column that's not specified in `allowedFields()` an `InvalidFieldQuery` exception will be thrown:

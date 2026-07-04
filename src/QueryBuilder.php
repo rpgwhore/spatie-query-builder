@@ -84,6 +84,7 @@ class QueryBuilder implements ArrayAccess
     {
         $result = $this->forwardCallTo($this->subject, $name, $arguments);
 
+        $result = $this->applyOnlyFieldsToResult($result);
         $result = $this->applyHiddenFieldsToResult($result);
 
         if ($result === $this->subject) {
